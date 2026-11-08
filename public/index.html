@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Uni</title>
+<meta name="theme-color" content="#f5f4f0" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121211" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Uni">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div id="login" class="login hidden">
+  <form id="loginForm" class="login-card">
+    <div class="logo">U</div>
+    <h1>Uni</h1>
+    <input type="password" id="pw" placeholder="Contraseña" autocomplete="current-password" required>
+    <button class="btn primary" type="submit">Entrar</button>
+    <p class="err" id="loginErr"></p>
+  </form>
+</div>
+
+<div id="app" class="hidden">
+  <header class="top">
+    <h1 id="viewTitle">Estudio</h1>
+    <div class="top-right" id="topRight"></div>
+  </header>
+
+  <main>
+    <!-- ESTUDIO -->
+    <section id="v-estudio" class="view">
+      <div class="timer-card" id="timerCard">
+        <div class="ring-wrap">
+          <svg class="ring" viewBox="0 0 200 200"><circle cx="100" cy="100" r="88" class="ring-bg"/><circle cx="100" cy="100" r="88" class="ring-fg" id="ringFg"/></svg>
+          <div class="ring-center">
+            <div class="clock" id="clock">00:00:00</div>
+            <div class="clock-sub" id="clockSub">Listo para empezar</div>
+          </div>
+        </div>
+        <div class="chips" id="subjectChips"></div>
+        <textarea id="note" rows="2" placeholder="¿Qué estás haciendo? (ej. SuS Blatt 3, Aufgabe 2)"></textarea>
+        <button class="btn big" id="startBtn">Empezar</button>
+        <div class="focus-hint" id="focusHint"></div>
+      </div>
+
+      <div class="grid2">
+        <div class="card">
+          <div class="card-h"><h2>Hoy</h2><span class="muted" id="todayTotal">0 h</span></div>
+          <div id="todayList" class="sess-list"></div>
+          <button class="link" id="addManual">+ Añadir sesión a mano</button>
+        </div>
+        <div class="card">
+          <div class="card-h"><h2>Esta semana</h2><span class="muted" id="streak"></span></div>
+          <div id="weekBars"></div>
+          <div class="days-bar" id="daysBar"></div>
+        </div>
+      </div>
+      <div class="card exams" id="exams"></div>
+    </section>
+
+    <!-- TABLERO -->
+    <section id="v-tablero" class="view hidden">
+      <div class="board-bar">
+        <select id="boardSel"></select>
+        <button class="btn sm" id="newBoard">+ Tablero</button>
+        <button class="icon-btn" id="boardMenu" title="Opciones del tablero">⋯</button>
+      </div>
+      <div class="board" id="board"></div>
+    </section>
+
+    <!-- TAREAS -->
+    <section id="v-tareas" class="view hidden">
+      <div class="task-bar">
+        <button class="btn sm primary" id="newTask">+ Tarea</button>
+        <button class="btn sm" id="syncIlias">↻ ILIAS</button>
+        <label class="toggle"><input type="checkbox" id="showCitas"> Ver citas</label>
+        <select id="taskFilter"><option value="">Todas</option></select>
+      </div>
+      <div class="muted small" id="iliasInfo"></div>
+      <div id="tasks"></div>
+    </section>
+
+    <!-- AJUSTES -->
+    <section id="v-ajustes" class="view hidden">
+      <form id="settingsForm" class="card settings">
+        <h2>Modo Universidad (Atajos de Apple)</h2>
+        <label class="toggle"><input type="checkbox" name="focusEnabled"> Al empezar/parar, lanzar los atajos</label>
+        <label>Atajo al empezar <input name="focusOn" placeholder="Universidad ON"></label>
+        <label>Atajo al parar <input name="focusOff" placeholder="Universidad OFF"></label>
+        <p class="muted small">El atajo activa la Concentración «Universidad». Si en Ajustes → Concentración tienes activado «Compartir entre dispositivos», se activa también en el Mac.</p>
+
+        <h2>Pomodoro</h2>
+        <label class="toggle"><input type="checkbox" name="pomoEnabled"> Avisar para pausas</label>
+        <div class="row2"><label>Trabajo (min) <input type="number" name="pomoWork" min="5" max="180"></label><label>Pausa (min) <input type="number" name="pomoRest" min="1" max="60"></label></div>
+
+        <h2>Objetivo semanal (horas)</h2>
+        <div class="row4" id="targetsInputs"></div>
+
+        <h2>ILIAS</h2>
+        <label>Enlace iCal privado <input name="ilias" placeholder="https://ilias.studium.kit.edu/calendar.php?…" autocomplete="off"></label>
+        <p class="muted small">En ILIAS: Escritorio → Calendario → «Suscribir» (icono de calendario) → copia el enlace. Se sincroniza cada 3 horas.</p>
+
+        <button class="btn primary" type="submit">Guardar</button>
+        <p class="muted small" id="settingsMsg"></p>
+      </form>
+      <div class="card settings">
+        <h2>Datos</h2>
+        <a class="btn sm" href="/api/export">Exportar todo (JSON)</a>
+        <button class="btn sm" id="logout">Cerrar sesión</button>
+      </div>
+    </section>
+  </main>
+
+  <nav class="tabs">
+    <button data-v="estudio" class="active"><span>⏱</span>Estudio</button>
+    <button data-v="tablero"><span>▦</span>Tablero</button>
+    <button data-v="tareas"><span>✓</span>Tareas</button>
+    <button data-v="ajustes"><span>⚙︎</span>Ajustes</button>
+  </nav>
+</div>
+
+<dialog id="modal"><form method="dialog" id="modalForm"></form></dialog>
+<div id="toast" class="toast"></div>
+
+<script src="/vendor/sortable.min.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "name": "uni-app",
+  "version": "1.0.0",
+  "description": "Cronómetro de estudio, tablero y tareas de ILIAS",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "express": "^5.3.0",
+    "pg": "^8.23.1",
+    "sortablejs": "^1.15.7"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "private": true
+}
