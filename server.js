@@ -368,7 +368,8 @@ app.get("/api/export", wrap(async (req, res) => {
 // ---------- Estáticos ----------
 app.use("/vendor/webauthn.min.js", (req, res) => res.sendFile(path.join(__dirname, "node_modules/@simplewebauthn/browser/dist/bundle/index.umd.min.js")));
 app.use("/vendor/sortable.min.js", (req, res) => res.sendFile(require.resolve("sortablejs/Sortable.min.js")));
-app.use(express.static(path.join(__dirname, "public"), { extensions: ["html"], maxAge: PROD ? "1h" : 0 }));
+// no-cache: el navegador siempre comprueba si hay versión nueva (con ETag, así que es rápido)
+app.use(express.static(path.join(__dirname, "public"), { extensions: ["html"], setHeaders: res => res.setHeader("Cache-Control", "no-cache") }));
 app.get(/^(?!\/api\/).*/, (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 
 migrate().then(() => {

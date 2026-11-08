@@ -234,8 +234,13 @@ async function loadBoards() {
 $("#boardSel").onchange = e => { boardId = +e.target.value; try { localStorage.setItem("uni:board", boardId); } catch { } loadBoard(); };
 $("#newBoard").onclick = async () => {
   const r = await modal("Nuevo tablero", `<label>Nombre<input name="name" required placeholder="p. ej. MSUP Workshop"></label>`, [["cancel", "Cancelar"], ["save", "Crear", "primary"]]);
-  if (!r) return; const b = await api("/boards", { method: "POST", body: { name: r.data.name } });
-  try { localStorage.setItem("uni:board", b.id); } catch { } loadBoards();
+  if (!r) return;
+  try {
+    const b = await api("/boards", { method: "POST", body: { name: r.data.name } });
+    try { localStorage.setItem("uni:board", b.id); } catch { }
+    await loadBoards(); boardId = b.id; $("#boardSel").value = String(b.id); await loadBoard();
+    toast("Tablero «" + b.name + "» creado");
+  } catch (e) { toast("No se pudo crear: " + e.message); }
 };
 $("#boardMenu").onclick = async () => {
   if (!board) return;
