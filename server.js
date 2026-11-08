@@ -225,7 +225,8 @@ app.get("/api/stats", wrap(async (req, res) => {
     const k = `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
     if (days.has(k)) streak++; else if (i > 0) break;
   }
-  res.json({ now, active, today, week, perDay, todaySessions, targets: settings.targets, streak });
+  const pause = (await q("SELECT value FROM settings WHERE key='_pause'")).rows[0]?.value || null;
+  res.json({ now, active, pause: active ? null : pause, today, week, perDay, todaySessions, targets: settings.targets, streak });
 }));
 
 app.get("/api/sessions", wrap(async (req, res) => {
@@ -233,12 +234,41 @@ app.get("/api/sessions", wrap(async (req, res) => {
   const { rows } = await q("SELECT * FROM sessions WHERE started_at >= $1 ORDER BY started_at DESC LIMIT 500", [from]);
   res.json(rows);
 }));
+const clearPause = () => q("DELETE FROM settings WHERE key='_pause'");
+// Pausa: cierra la sesión actual (queda guardada) y recuerda la tarea para reanudarla luego
+app.post("/api/timer/pause", wrap(async (req, res) => {
+  const mins = Math.max(1, Math.min(240, Number(req.body?.minutes) || 10));
+  const { rows } = await q("UPDATE sessions SET ended_at = now(), note = COALESCE($1, note) WHERE ended_at IS NULL RETURNING *", [req.body?.note ?? null]);
+  if (!rows[0]) return res.status(400).json({ error: "No hay ninguna sesión en marcha" });
+  const now = Date.now();
+  const pause = { subject: rows[0].subject, note: rows[0].note, started_at: new Date(now).toISOString(), until: new Date(now + mins * 60e3).toISOString(), minutes: mins };
+  await q("INSERT INTO settings(key,value) VALUES ('_pause',$1) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", [JSON.stringify(pause)]);
+  res.json(pause);
+}));
+app.post("/api/timer/pause/extend", wrap(async (req, res) => {
+  const r = (await q("SELECT value FROM settings WHERE key='_pause'")).rows[0];
+  if (!r) return res.status(400).json({ error: "No estás en pausa" });
+  const p = r.value, mins = Math.max(1, Math.min(120, Number(req.body?.minutes) || 5));
+  p.until = new Date(Math.max(Date.now(), new Date(p.until).getTime()) + mins * 60e3).toISOString(); p.minutes += mins;
+  await q("UPDATE settings SET value=$1 WHERE key='_pause'", [JSON.stringify(p)]);
+  res.json(p);
+}));
+app.post("/api/timer/resume", wrap(async (req, res) => {
+  const r = (await q("SELECT value FROM settings WHERE key='_pause'")).rows[0];
+  if (!r) return res.status(400).json({ error: "No estás en pausa" });
+  await q("UPDATE sessions SET ended_at = now() WHERE ended_at IS NULL");
+  const { rows } = await q("INSERT INTO sessions(subject,note) VALUES ($1,$2) RETURNING *", [r.value.subject, r.value.note || ""]);
+  await clearPause(); res.json(rows[0]);
+}));
+app.post("/api/timer/pause/end", wrap(async (req, res) => { await clearPause(); res.json({ ok: true }); }));
 app.post("/api/timer/start", wrap(async (req, res) => {
+  await clearPause();
   await q("UPDATE sessions SET ended_at = now() WHERE ended_at IS NULL");
   const { rows } = await q("INSERT INTO sessions(subject,note) VALUES ($1,$2) RETURNING *", [req.body.subject || "Otro", req.body.note || ""]);
   res.json(rows[0]);
 }));
 app.post("/api/timer/stop", wrap(async (req, res) => {
+  await clearPause();
   const { rows } = await q("UPDATE sessions SET ended_at = now(), note = COALESCE($1, note) WHERE ended_at IS NULL RETURNING *", [req.body?.note ?? null]);
   res.json(rows[0] || null);
 }));

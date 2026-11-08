@@ -146,3 +146,10 @@ dialog::backdrop{background:rgba(0,0,0,.35)}
 .toast{position:fixed;left:50%;bottom:calc(90px + var(--safe-b));transform:translateX(-50%) translateY(20px);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:12px;font-size:14px;opacity:0;pointer-events:none;transition:.25s;z-index:50;max-width:90vw}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 .big-pk{padding:14px;font-size:16px;font-weight:600}
+
+.pause-row{display:flex;gap:8px;justify-content:center;align-items:center;flex-wrap:wrap;margin-top:10px;min-height:34px}
+.pause-row .lbl{font-size:13px;color:var(--mute)}
+.pause-row .btn{padding:6px 12px;font-size:14px;border-radius:99px}
+.timer-card.paused{border-color:#e8a33d;box-shadow:0 0 0 3px color-mix(in srgb,#e8a33d 20%,transparent)}
+.btn.big.resume{background:#e8a33d;color:#1c1c1a}
+.clock.over{color:var(--danger)}
