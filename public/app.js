@@ -30,11 +30,18 @@ function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.ad
 // modal genérico: devuelve {action, data} o null
 function modal(title, inner, actions = [["cancel", "Cancelar"], ["save", "Guardar", "primary"]], left = null) {
   const d = $("#modal"), f = $("#modalForm");
-  f.innerHTML = `<h2>${esc(title)}</h2>${inner}<div class="m-actions"><div>${left ? `<button class="btn sm danger" value="${left[0]}" formnovalidate>${left[1]}</button>` : ""}</div><div>${actions.map(([v, l, c]) => `<button class="btn sm ${c || ""}" value="${v}" ${v === "cancel" ? "formnovalidate" : ""}>${l}</button>`).join("")}</div></div>`;
+  // Solo la última acción es "submit": así Enter en el teclado guarda (y nunca cancela ni borra)
+  const btn = ([v, l, c], submit) => submit
+    ? `<button class="btn sm ${c || ""}" value="${v}" type="submit">${l}</button>`
+    : `<button class="btn sm ${c || ""}" data-close="${v}" type="button">${l}</button>`;
+  f.innerHTML = `<h2>${esc(title)}</h2>${inner}<div class="m-actions"><div>${left ? btn([left[0], left[1], "danger"], false) : ""}</div><div>${actions.map((a, i) => btn(a, i === actions.length - 1)).join("")}</div></div>`;
   return new Promise(res => {
-    d.onclose = () => { const a = d.returnValue; res(a && a !== "cancel" ? { action: a, data: Object.fromEntries(new FormData(f)) } : null); };
-    d.returnValue = ""; d.showModal();
-    const first = f.querySelector("input,textarea"); if (first && matchMedia("(pointer:fine)").matches) first.focus();
+    let action = null;
+    f.querySelectorAll("[data-close]").forEach(b => b.onclick = () => { action = b.dataset.close; d.close(); });
+    f.onsubmit = e => { e.preventDefault(); if (!f.reportValidity()) return; action = (e.submitter && e.submitter.value) || actions[actions.length - 1][0]; d.close(); };
+    d.onclose = () => res(action && action !== "cancel" ? { action, data: Object.fromEntries(new FormData(f)) } : null);
+    d.showModal();
+    const first = f.querySelector("input:not([type=hidden]),textarea"); if (first && matchMedia("(pointer:fine)").matches) first.focus();
   });
 }
 
