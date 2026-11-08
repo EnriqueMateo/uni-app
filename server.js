@@ -237,11 +237,11 @@ app.get("/api/sessions", wrap(async (req, res) => {
 const clearPause = () => q("DELETE FROM settings WHERE key='_pause'");
 // Pausa: cierra la sesión actual (queda guardada) y recuerda la tarea para reanudarla luego
 app.post("/api/timer/pause", wrap(async (req, res) => {
-  const mins = Math.max(1, Math.min(240, Number(req.body?.minutes) || 10));
+  const mins = req.body?.minutes ? Math.max(1, Math.min(240, Number(req.body.minutes))) : null; // sin minutos = pausa abierta
   const { rows } = await q("UPDATE sessions SET ended_at = now(), note = COALESCE($1, note) WHERE ended_at IS NULL RETURNING *", [req.body?.note ?? null]);
   if (!rows[0]) return res.status(400).json({ error: "No hay ninguna sesión en marcha" });
   const now = Date.now();
-  const pause = { subject: rows[0].subject, note: rows[0].note, started_at: new Date(now).toISOString(), until: new Date(now + mins * 60e3).toISOString(), minutes: mins };
+  const pause = { subject: rows[0].subject, note: rows[0].note, started_at: new Date(now).toISOString(), until: mins ? new Date(now + mins * 60e3).toISOString() : null, minutes: mins };
   await q("INSERT INTO settings(key,value) VALUES ('_pause',$1) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", [JSON.stringify(pause)]);
   res.json(pause);
 }));

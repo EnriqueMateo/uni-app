@@ -116,18 +116,16 @@ function runShortcut(name) {
   if (!/Mac|iPhone|iPad|iPod/.test(navigator.userAgent)) return; // Atajos solo existe en Apple
   setTimeout(() => { location.href = "shortcuts://run-shortcut?name=" + encodeURIComponent(name); }, 150);
 }
+// Botón principal: Empezar → Pausa → Seguir.  Botón secundario: Terminar.
 $("#startBtn").onclick = async () => {
   const btn = $("#startBtn"); btn.disabled = true;
   try {
     if (stats?.pause) {
       await api("/timer/resume", { method: "POST" });
-      toast("De vuelta a " + (stats.pause.note || stats.pause.subject));
-      runShortcut(settings.focus.on);
+      toast("Sigues con " + (stats.pause.note || stats.pause.subject));
     } else if (stats?.active) {
-      await api("/timer/stop", { method: "POST", body: { note: $("#note").value } });
-      toast("Sesión guardada: " + fmtHM((Date.now() - new Date(stats.active.started_at)) / 60000));
-      runShortcut(settings.focus.off);
-      $("#note").value = "";
+      await api("/timer/pause", { method: "POST", body: { note: $("#note").value } });
+      toast("En pausa. La tarea queda guardada.");
     } else {
       await api("/timer/start", { method: "POST", body: { subject: selSubject, note: $("#note").value } });
       runShortcut(settings.focus.on);
@@ -135,30 +133,17 @@ $("#startBtn").onclick = async () => {
     await loadStats();
   } catch (e) { toast(e.message); } finally { btn.disabled = false; }
 };
-async function startPause(minutes) {
+$("#endBtn").onclick = async () => {
+  const btn = $("#endBtn"); btn.disabled = true;
   try {
-    await api("/timer/pause", { method: "POST", body: { minutes, note: $("#note").value } });
-    toast(`Pausa de ${minutes} min. La tarea queda guardada.`);
+    if (stats?.pause) await api("/timer/pause/end", { method: "POST" });
+    else if (stats?.active) await api("/timer/stop", { method: "POST", body: { note: $("#note").value } });
+    toast("Sesión terminada. Hoy llevas " + fmtHM(stats.today));
     runShortcut(settings.focus.off);
+    $("#note").value = "";
     await loadStats();
-  } catch (e) { toast(e.message); }
-}
-async function customPause() {
-  const r = await modal("Pausa", `<label>Minutos<input type="number" name="m" min="1" max="240" value="10" required inputmode="numeric"></label>`, [["cancel", "Cancelar"], ["ok", "Empezar pausa", "primary"]]);
-  if (r) startPause(Math.round(Number(r.data.m)) || 10);
-}
-function renderPauseRow() {
-  const el = $("#pauseRow");
-  if (stats?.pause) {
-    el.innerHTML = `<button class="btn" data-ext="5">+5 min</button><button class="btn" data-ext="10">+10 min</button><button class="btn" id="endPause">Terminar sesión</button>`;
-    el.querySelectorAll("[data-ext]").forEach(b => b.onclick = async () => { await api("/timer/pause/extend", { method: "POST", body: { minutes: +b.dataset.ext } }); pauseAlerted = false; loadStats(); });
-    $("#endPause").onclick = async () => { await api("/timer/pause/end", { method: "POST" }); $("#note").value = ""; toast("Sesión terminada"); loadStats(); };
-  } else if (stats?.active) {
-    el.innerHTML = `<span class="lbl">Pausa:</span>${[5, 10, 15].map(m => `<button class="btn" data-p="${m}">${m} min</button>`).join("")}<button class="btn" id="pCustom">Otra…</button>`;
-    el.querySelectorAll("[data-p]").forEach(b => b.onclick = () => startPause(+b.dataset.p));
-    $("#pCustom").onclick = customPause;
-  } else el.innerHTML = "";
-}
+  } catch (e) { toast(e.message); } finally { btn.disabled = false; }
+};
 
 let noteT; $("#note").oninput = () => { clearTimeout(noteT); if (stats?.active) noteT = setTimeout(() => api(`/sessions/${stats.active.id}`, { method: "PATCH", body: { note: $("#note").value } }), 700); };
 
@@ -167,27 +152,25 @@ async function loadStats() {
   stats._fetched = Date.now(); stats._serverNow = new Date(stats.now).getTime();
   if (stats.active) { selSubject = stats.active.subject; if (document.activeElement !== $("#note")) $("#note").value = stats.active.note || ""; }
   if (stats.pause) { selSubject = stats.pause.subject; if (document.activeElement !== $("#note")) $("#note").value = stats.pause.note || ""; }
-  renderChips(); renderStats(); renderPauseRow(); tick();
+  renderChips(); renderStats(); tick();
 }
 function nowMs() { return stats ? stats._serverNow + (Date.now() - stats._fetched) : Date.now(); }
-let lastPhase = null, pauseAlerted = false;
+let lastPhase = null;
 function tick() {
   if (!stats) return;
   const a = stats.active, card = $("#timerCard"), btn = $("#startBtn"), p = stats.pause;
   card.classList.toggle("running", !!a); card.classList.toggle("paused", !!p);
-  btn.textContent = p ? "Reanudar" : a ? "Parar" : "Empezar"; btn.classList.toggle("stop", !!a); btn.classList.toggle("resume", !!p);
+  btn.textContent = p ? "Seguir" : a ? "Pausa" : "Empezar";
+  btn.classList.toggle("pause", !!a); btn.classList.toggle("resume", false); btn.classList.toggle("stop", false);
+  $("#endBtn").classList.toggle("hidden", !a && !p);
   $("#clock").classList.remove("over");
   if (p) {
-    const total = new Date(p.until) - new Date(p.started_at), left = new Date(p.until) - nowMs();
-    const s = Math.abs(Math.round(left / 1000));
-    $("#clock").textContent = (left < 0 ? "+" : "") + `${pad(Math.floor(s / 60))}:${pad(s % 60)}`;
-    $("#clock").classList.toggle("over", left < 0);
-    $("#clockSub").textContent = left < 0 ? "Pausa terminada · vuelve cuando quieras" : `Pausa · luego: ${p.note || p.subject}`;
+    const s = Math.max(0, Math.round((nowMs() - new Date(p.started_at)) / 1000));
+    $("#clock").textContent = s >= 3600 ? `${Math.floor(s / 3600)}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}` : `${pad(Math.floor(s / 60))}:${pad(s % 60)}`;
+    $("#clockSub").textContent = `En pausa · luego: ${p.note || p.subject}`;
     $("#ringFg").style.stroke = "#e8a33d";
-    $("#ringFg").style.strokeDashoffset = 553 * Math.min(1, Math.max(0, 1 - left / total));
-    if (left <= 0 && !pauseAlerted) { pauseAlerted = true; beep(); setTimeout(beep, 700); navigator.vibrate?.([300, 200, 300]); toast("¡Se acabó la pausa! Dale a Reanudar."); }
-    if (left > 0) pauseAlerted = false;
-    $("#focusHint").textContent = settings.focus?.enabled ? `Al reanudar se activa «${settings.focus.on}»` : "";
+    $("#ringFg").style.strokeDashoffset = 553 * (1 - ((s / 60) % 60) / 60);
+    $("#focusHint").textContent = "La pausa no cuenta como estudio";
     return;
   }
   const studyTargets = Object.entries(stats.targets).filter(([k]) => k !== "MSUP").reduce((s, [, v]) => s + Number(v || 0), 0);
@@ -218,7 +201,7 @@ function tick() {
     ringPct = Math.min(1, stats.today / dailyGoal); $("#ringFg").style.stroke = "var(--accent)";
   }
   $("#ringFg").style.strokeDashoffset = 553 * (1 - ringPct);
-  $("#focusHint").textContent = settings.focus?.enabled ? (a ? `Al parar: «${settings.focus.off}»` : `Al empezar se activa «${settings.focus.on}»`) : "";
+  $("#focusHint").textContent = settings.focus?.enabled ? (a ? `Al terminar: «${settings.focus.off}»` : `Al empezar se activa «${settings.focus.on}»`) : "";
 }
 setInterval(tick, 1000);
 let audioCtx; function beep() { try { audioCtx = audioCtx || new AudioContext(); const o = audioCtx.createOscillator(), g = audioCtx.createGain(); o.connect(g); g.connect(audioCtx.destination); o.frequency.value = 880; g.gain.setValueAtTime(.2, audioCtx.currentTime); g.gain.exponentialRampToValueAtTime(.001, audioCtx.currentTime + .6); o.start(); o.stop(audioCtx.currentTime + .6); } catch { } }

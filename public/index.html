@@ -13,7 +13,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-<link rel="stylesheet" href="/styles.css?v=5">
+<link rel="stylesheet" href="/styles.css?v=6">
 </head>
 <body>
 <div id="login" class="login hidden">
@@ -49,8 +49,10 @@
         </div>
         <div class="chips" id="subjectChips"></div>
         <textarea id="note" rows="2" placeholder="¿Qué estás haciendo? (ej. SuS Blatt 3, Aufgabe 2)"></textarea>
-        <button class="btn big" id="startBtn">Empezar</button>
-        <div class="pause-row" id="pauseRow"></div>
+        <div class="ctrl">
+          <button class="btn big" id="startBtn">Empezar</button>
+          <button class="btn big end hidden" id="endBtn">Terminar</button>
+        </div>
         <div class="focus-hint" id="focusHint"></div>
       </div>
 
@@ -141,6 +143,6 @@
 
 <script src="/vendor/sortable.min.js"></script>
 <script src="/vendor/webauthn.min.js"></script>
-<script src="/app.js?v=5"></script>
+<script src="/app.js?v=6"></script>
 </body>
 </html>
