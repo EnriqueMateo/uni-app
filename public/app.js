@@ -20,7 +20,7 @@ async function api(path, opts = {}) {
     headers: opts.body ? { "Content-Type": "application/json" } : {},
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
-  if (r.status === 401 && path !== "/login") { showLogin(); throw new Error("No autorizado"); }
+  if (r.status === 401 && !path.startsWith("/login") && !path.startsWith("/passkey")) { showLogin(); throw new Error("No autorizado"); }
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data.error || "Error " + r.status);
   return data;
@@ -41,13 +41,46 @@ function modal(title, inner, actions = [["cancel", "Cancelar"], ["save", "Guarda
 // ---------- estado ----------
 let settings = null, stats = null, selSubject = "SuS", view = "estudio";
 
-// ---------- login ----------
-function showLogin() { $("#app").classList.add("hidden"); $("#login").classList.remove("hidden"); }
+// ---------- login (passkeys) ----------
+let me = {};
+function showLogin() {
+  $("#app").classList.add("hidden"); $("#login").classList.remove("hidden");
+  const setup = !me.hasPasskeys && !me.hasPassword;
+  $("#loginMsg").textContent = setup ? "Primera vez: registra tu Face ID / Touch ID para que solo tú puedas entrar." : "";
+  $("#pkBtn").textContent = setup ? "Activar Face ID / Touch ID" : "Entrar con Face ID / Touch ID";
+  $("#pkBtn").classList.toggle("hidden", !me.hasPasskeys && !setup);
+  $("#loginForm").classList.toggle("hidden", !me.hasPassword);
+}
+function deviceName() { const u = navigator.userAgent; return /iPhone/.test(u) ? "iPhone" : /iPad/.test(u) ? "iPad" : /Mac/.test(u) ? "Mac" : "Dispositivo"; }
+async function registerPasskey() {
+  const optionsJSON = await api("/passkey/register/options", { method: "POST" });
+  const response = await SimpleWebAuthnBrowser.startRegistration({ optionsJSON });
+  await api("/passkey/register/verify", { method: "POST", body: { response, name: deviceName() } });
+}
+async function loginPasskey() {
+  const optionsJSON = await api("/passkey/login/options", { method: "POST" });
+  const response = await SimpleWebAuthnBrowser.startAuthentication({ optionsJSON });
+  await api("/passkey/login/verify", { method: "POST", body: { response } });
+}
+$("#pkBtn").onclick = async () => {
+  $("#loginErr").textContent = "";
+  try {
+    if (!me.hasPasskeys && !me.hasPassword) await registerPasskey(); else await loginPasskey();
+    me = await fetch("/api/me").then(r => r.json());
+    $("#login").classList.add("hidden"); boot();
+  } catch (e) { $("#loginErr").textContent = e.name === "NotAllowedError" ? "Cancelado. Vuelve a intentarlo." : e.message; }
+};
 $("#loginForm").onsubmit = async e => {
   e.preventDefault();
   try { await api("/login", { method: "POST", body: { password: $("#pw").value } }); $("#login").classList.add("hidden"); boot(); }
   catch (err) { $("#loginErr").textContent = err.message; }
 };
+async function loadPasskeys() {
+  const list = await api("/passkeys");
+  $("#pkList").innerHTML = list.length ? list.map(k => `<div class="sess"><span class="n">🔑 ${esc(k.name || "Dispositivo")}</span><span class="t">${new Date(k.created_at).toLocaleDateString("es-ES")}</span>${list.length > 1 ? `<button class="icon-btn" data-del-pk="${esc(k.id)}" title="Quitar">×</button>` : ""}</div>`).join("") : `<p class="muted">Ninguno todavía.</p>`;
+  $$("[data-del-pk]").forEach(b => b.onclick = async () => { await api(`/passkeys/${encodeURIComponent(b.dataset.delPk)}`, { method: "DELETE" }); loadPasskeys(); });
+}
+$("#addPk").onclick = async () => { try { await registerPasskey(); toast("Dispositivo añadido"); loadPasskeys(); } catch (e) { toast(e.name === "NotAllowedError" ? "Cancelado" : e.message); } };
 $("#logout").onclick = async () => { await api("/logout", { method: "POST" }); location.reload(); };
 
 // ---------- navegación ----------
@@ -61,7 +94,7 @@ function go(v) {
   if (v === "estudio") loadStats();
   if (v === "tablero") loadBoards();
   if (v === "tareas") loadTasks();
-  if (v === "ajustes") fillSettings();
+  if (v === "ajustes") { fillSettings(); loadPasskeys(); }
 }
 $$(".tabs button").forEach(b => b.onclick = () => go(b.dataset.v));
 
@@ -380,7 +413,8 @@ async function boot() {
 }
 document.addEventListener("visibilitychange", () => { if (!document.hidden && settings) { if (view === "estudio") loadStats(); if (view === "tareas") loadTasks(); } });
 (async () => {
-  const me = await fetch("/api/me").then(r => r.json()).catch(() => ({ authed: false }));
-  if (me.authed) boot(); else showLogin();
+  me = await fetch("/api/me").then(r => r.json()).catch(() => ({ authed: false }));
+  // Sin passkey ni contraseña: obliga a registrar Face ID / Touch ID antes de usar la app
+  if (me.authed && (me.hasPasskeys || me.hasPassword)) boot(); else showLogin();
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => { });
 })();

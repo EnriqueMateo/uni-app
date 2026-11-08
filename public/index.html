@@ -17,13 +17,17 @@
 </head>
 <body>
 <div id="login" class="login hidden">
-  <form id="loginForm" class="login-card">
+  <div class="login-card">
     <div class="logo">U</div>
     <h1>Uni</h1>
-    <input type="password" id="pw" placeholder="Contraseña" autocomplete="current-password" required>
-    <button class="btn primary" type="submit">Entrar</button>
+    <p class="muted small" id="loginMsg"></p>
+    <button class="btn primary big-pk" id="pkBtn" type="button">Entrar con Face ID / Touch ID</button>
+    <form id="loginForm" class="hidden" style="display:grid;gap:10px">
+      <input type="password" id="pw" placeholder="Contraseña" autocomplete="current-password">
+      <button class="btn" type="submit">Entrar con contraseña</button>
+    </form>
     <p class="err" id="loginErr"></p>
-  </form>
+  </div>
 </div>
 
 <div id="app" class="hidden">
@@ -110,6 +114,12 @@
         <p class="muted small" id="settingsMsg"></p>
       </form>
       <div class="card settings">
+        <h2>Face ID / Touch ID</h2>
+        <div id="pkList" class="small"></div>
+        <button class="btn sm" id="addPk">+ Añadir este dispositivo</button>
+        <p class="muted small">Los passkeys se sincronizan por el Llavero de iCloud: si lo registras en el iPhone, normalmente también te funciona en el Mac.</p>
+      </div>
+      <div class="card settings">
         <h2>Datos</h2>
         <a class="btn sm" href="/api/export">Exportar todo (JSON)</a>
         <button class="btn sm" id="logout">Cerrar sesión</button>
@@ -129,6 +139,7 @@
 <div id="toast" class="toast"></div>
 
 <script src="/vendor/sortable.min.js"></script>
+<script src="/vendor/webauthn.min.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

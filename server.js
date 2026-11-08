@@ -4,16 +4,16 @@ const crypto = require("crypto");
 const path = require("path");
 const { Pool } = require("pg");
 const { parseICS, classify } = require("./ics");
+const { generateRegistrationOptions, verifyRegistrationResponse, generateAuthenticationOptions, verifyAuthenticationResponse } = require("@simplewebauthn/server");
 
 const PORT = process.env.PORT || 3000;
 const TZ = "Europe/Berlin";
 const APP_PASSWORD = process.env.APP_PASSWORD || "";
-const SECRET = process.env.SESSION_SECRET || crypto.createHash("sha256").update("uni-app:" + APP_PASSWORD).digest("hex");
+let SECRET = process.env.SESSION_SECRET || null; // si no se define, se genera una vez y se guarda en la base de datos
 const API_TOKEN = process.env.API_TOKEN || "";
 const PROD = process.env.NODE_ENV === "production" || !!process.env.RAILWAY_ENVIRONMENT;
 
 if (!process.env.DATABASE_URL) { console.error("Falta DATABASE_URL"); process.exit(1); }
-if (!APP_PASSWORD) console.warn("⚠️  APP_PASSWORD no está definida: cualquiera puede entrar.");
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -43,8 +43,17 @@ async function migrate() {
     hidden BOOLEAN NOT NULL DEFAULT false, edited BOOLEAN NOT NULL DEFAULT false,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now());
   CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value JSONB NOT NULL);
+  CREATE TABLE IF NOT EXISTS passkeys (
+    id TEXT PRIMARY KEY, public_key BYTEA NOT NULL, counter BIGINT NOT NULL DEFAULT 0, transports JSONB,
+    name TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), last_used TIMESTAMPTZ);
   CREATE INDEX IF NOT EXISTS sessions_started ON sessions(started_at);
   `);
+  if (!SECRET) {
+    const r = await q("SELECT value FROM settings WHERE key='_secret'");
+    if (r.rows[0]) SECRET = r.rows[0].value;
+    else { SECRET = crypto.randomBytes(32).toString("hex"); await q("INSERT INTO settings(key,value) VALUES ('_secret',$1)", [JSON.stringify(SECRET)]); }
+  }
+  await refreshPasskeyCount();
   const { rows } = await q("SELECT count(*)::int AS n FROM boards");
   if (rows[0].n === 0) {
     const b = await q("INSERT INTO boards(name) VALUES ('Uni') RETURNING id");
@@ -65,7 +74,7 @@ const DEFAULT_SETTINGS = {
 async function getSettings() {
   const { rows } = await q("SELECT key, value FROM settings");
   const s = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
-  for (const r of rows) s[r.key] = r.value;
+  for (const r of rows) if (!r.key.startsWith("_")) s[r.key] = r.value;
   return s;
 }
 async function setSetting(key, value) {
@@ -100,30 +109,96 @@ function verify(tok) {
 function cookies(req) {
   return Object.fromEntries((req.headers.cookie || "").split(";").map(c => c.trim().split("=")).filter(x => x[0]).map(([k, ...v]) => [k, decodeURIComponent(v.join("="))]));
 }
+let passkeyCount = 0;
+async function refreshPasskeyCount() { passkeyCount = (await q("SELECT count(*)::int AS n FROM passkeys")).rows[0].n; }
+// Hace falta identificarse si hay contraseña o si ya hay algún passkey registrado
+const authRequired = () => !!APP_PASSWORD || passkeyCount > 0;
 function authed(req) {
-  if (!APP_PASSWORD) return true;
+  if (!authRequired()) return true;
   const h = req.headers.authorization || "";
   if (API_TOKEN && h === "Bearer " + API_TOKEN) return true;
   return verify(cookies(req).uni);
+}
+function setSessionCookie(res) {
+  const tok = sign("u:" + Date.now());
+  res.setHeader("Set-Cookie", `uni=${encodeURIComponent(tok)}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax${PROD ? "; Secure" : ""}`);
 }
 
 const app = express();
 app.set("trust proxy", 1);
 app.use(express.json({ limit: "1mb" }));
+const wrap = fn => (req, res) => fn(req, res).catch(e => { console.error(e); res.status(500).json({ error: e.message }); });
 
 app.post("/api/login", (req, res) => {
   const pw = String(req.body?.password || "");
   const ok = APP_PASSWORD && pw.length === APP_PASSWORD.length && crypto.timingSafeEqual(Buffer.from(pw), Buffer.from(APP_PASSWORD));
   if (!ok) return res.status(401).json({ error: "Contraseña incorrecta" });
-  const tok = sign("u:" + Date.now());
-  res.setHeader("Set-Cookie", `uni=${encodeURIComponent(tok)}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax${PROD ? "; Secure" : ""}`);
-  res.json({ ok: true });
+  setSessionCookie(res); res.json({ ok: true });
 });
 app.post("/api/logout", (req, res) => { res.setHeader("Set-Cookie", "uni=; Path=/; Max-Age=0"); res.json({ ok: true }); });
-app.get("/api/me", (req, res) => res.json({ authed: authed(req), needsPassword: !!APP_PASSWORD }));
+app.get("/api/me", (req, res) => res.json({ authed: authed(req), hasPasskeys: passkeyCount > 0, hasPassword: !!APP_PASSWORD }));
+
+// ---------- Passkeys (Face ID / Touch ID) ----------
+const challenges = new Map(); // nonce -> {challenge, exp}
+function rp(req) { const host = req.get("host"); return { rpID: host.split(":")[0], origin: `${req.protocol}://${host}` }; }
+function saveChallenge(res, challenge) {
+  const nonce = crypto.randomBytes(16).toString("hex");
+  challenges.set(nonce, { challenge, exp: Date.now() + 5 * 60e3 });
+  for (const [k, v] of challenges) if (v.exp < Date.now()) challenges.delete(k);
+  res.setHeader("Set-Cookie", `unichal=${nonce}; Path=/api/passkey; Max-Age=300; HttpOnly; SameSite=Strict${PROD ? "; Secure" : ""}`);
+}
+function takeChallenge(req) {
+  const n = cookies(req).unichal; const c = n && challenges.get(n); if (n) challenges.delete(n);
+  return c && c.exp > Date.now() ? c.challenge : null;
+}
+async function allCreds() {
+  return (await q("SELECT * FROM passkeys")).rows.map(r => ({ id: r.id, publicKey: new Uint8Array(r.public_key), counter: Number(r.counter), transports: r.transports || undefined }));
+}
+app.post("/api/passkey/register/options", wrap(async (req, res) => {
+  // El primer passkey se puede crear sin estar dentro; los siguientes, solo con sesión iniciada
+  if (passkeyCount > 0 && !authed(req)) return res.status(401).json({ error: "No autorizado" });
+  const { rpID } = rp(req);
+  const opts = await generateRegistrationOptions({
+    rpName: "Uni", rpID, userName: "enrique", userDisplayName: "Enrique",
+    attestationType: "none",
+    excludeCredentials: (await allCreds()).map(c => ({ id: c.id, transports: c.transports })),
+    authenticatorSelection: { residentKey: "required", userVerification: "required" },
+  });
+  saveChallenge(res, opts.challenge); res.json(opts);
+}));
+app.post("/api/passkey/register/verify", wrap(async (req, res) => {
+  if (passkeyCount > 0 && !authed(req)) return res.status(401).json({ error: "No autorizado" });
+  const expectedChallenge = takeChallenge(req); if (!expectedChallenge) return res.status(400).json({ error: "El reto caducó, vuelve a intentarlo" });
+  const { rpID, origin } = rp(req);
+  const v = await verifyRegistrationResponse({ response: req.body.response, expectedChallenge, expectedOrigin: origin, expectedRPID: rpID, requireUserVerification: true });
+  if (!v.verified) return res.status(400).json({ error: "No se pudo verificar" });
+  const c = v.registrationInfo.credential;
+  await q("INSERT INTO passkeys(id, public_key, counter, transports, name) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (id) DO NOTHING",
+    [c.id, Buffer.from(c.publicKey), c.counter, JSON.stringify(c.transports || []), String(req.body.name || "Dispositivo").slice(0, 60)]);
+  await refreshPasskeyCount(); setSessionCookie(res); res.json({ ok: true });
+}));
+app.post("/api/passkey/login/options", wrap(async (req, res) => {
+  const { rpID } = rp(req);
+  const opts = await generateAuthenticationOptions({ rpID, userVerification: "required", allowCredentials: (await allCreds()).map(c => ({ id: c.id, transports: c.transports })) });
+  saveChallenge(res, opts.challenge); res.json(opts);
+}));
+app.post("/api/passkey/login/verify", wrap(async (req, res) => {
+  const expectedChallenge = takeChallenge(req); if (!expectedChallenge) return res.status(400).json({ error: "El reto caducó, vuelve a intentarlo" });
+  const cred = (await allCreds()).find(c => c.id === req.body.response?.id);
+  if (!cred) return res.status(401).json({ error: "Este dispositivo no está registrado" });
+  const { rpID, origin } = rp(req);
+  const v = await verifyAuthenticationResponse({ response: req.body.response, expectedChallenge, expectedOrigin: origin, expectedRPID: rpID, credential: cred, requireUserVerification: true });
+  if (!v.verified) return res.status(401).json({ error: "No se pudo verificar" });
+  await q("UPDATE passkeys SET counter=$1, last_used=now() WHERE id=$2", [v.authenticationInfo.newCounter, cred.id]);
+  setSessionCookie(res); res.json({ ok: true });
+}));
 
 app.use("/api", (req, res, next) => (authed(req) ? next() : res.status(401).json({ error: "No autorizado" })));
-const wrap = fn => (req, res) => fn(req, res).catch(e => { console.error(e); res.status(500).json({ error: e.message }); });
+app.get("/api/passkeys", wrap(async (req, res) => res.json((await q("SELECT id, name, created_at, last_used FROM passkeys ORDER BY created_at")).rows)));
+app.delete("/api/passkeys/:id", wrap(async (req, res) => {
+  if (passkeyCount <= 1) return res.status(400).json({ error: "No puedes borrar el último dispositivo" });
+  await q("DELETE FROM passkeys WHERE id=$1", [req.params.id]); await refreshPasskeyCount(); res.json({ ok: true });
+}));
 
 // ---------- Cronómetro / sesiones ----------
 const minutes = (r, now) => Math.max(0, ((r.ended_at ? new Date(r.ended_at) : now) - new Date(r.started_at)) / 60000);
@@ -282,12 +357,14 @@ app.put("/api/settings", wrap(async (req, res) => {
 }));
 app.get("/api/export", wrap(async (req, res) => {
   const out = {};
-  for (const t of ["sessions", "boards", "lists", "cards", "tasks", "settings"]) out[t] = (await q(`SELECT * FROM ${t}`)).rows;
+  for (const t of ["sessions", "boards", "lists", "cards", "tasks"]) out[t] = (await q(`SELECT * FROM ${t}`)).rows;
+  out.settings = (await q("SELECT * FROM settings WHERE key NOT LIKE '\\_%'")).rows;
   res.setHeader("Content-Disposition", "attachment; filename=uni-app-export.json");
   res.json(out);
 }));
 
 // ---------- Estáticos ----------
+app.use("/vendor/webauthn.min.js", (req, res) => res.sendFile(path.join(__dirname, "node_modules/@simplewebauthn/browser/dist/bundle/index.umd.min.js")));
 app.use("/vendor/sortable.min.js", (req, res) => res.sendFile(require.resolve("sortablejs/Sortable.min.js")));
 app.use(express.static(path.join(__dirname, "public"), { extensions: ["html"], maxAge: PROD ? "1h" : 0 }));
 app.get(/^(?!\/api\/).*/, (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
