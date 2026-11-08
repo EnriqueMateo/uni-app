@@ -53,6 +53,8 @@ async function migrate() {
     if (r.rows[0]) SECRET = r.rows[0].value;
     else { SECRET = crypto.randomBytes(32).toString("hex"); await q("INSERT INTO settings(key,value) VALUES ('_secret',$1)", [JSON.stringify(SECRET)]); }
   }
+  // Recuperación: con PASSKEY_RESET=1 se borran los passkeys al arrancar (quítala después de registrar el nuevo)
+  if (process.env.PASSKEY_RESET === "1") { await q("DELETE FROM passkeys"); console.warn("PASSKEY_RESET: passkeys borrados"); }
   await refreshPasskeyCount();
   const { rows } = await q("SELECT count(*)::int AS n FROM boards");
   if (rows[0].n === 0) {
