@@ -67,6 +67,7 @@ async function migrate() {
 const DEFAULT_SETTINGS = {
   targets: { SuS: 10, EEN: 5.5, HEF: 4, MSUP: 10 },
   subjects: ["SuS", "EEN", "HEF", "MSUP", "Otro"],
+  subject_colors: { SuS: "#3b5bdb", EEN: "#2b8a3e", HEF: "#d9480f", MSUP: "#7048e8", Otro: "#868e96" },
   focus: { enabled: true, on: "Universidad ON", off: "Universidad OFF" },
   pomodoro: { enabled: false, work: 50, rest: 10 },
   ilias_url: process.env.ILIAS_ICAL_URL || "",
@@ -340,10 +341,18 @@ app.patch("/api/tasks/:id", wrap(async (req, res) => {
   if (["title", "subject", "due", "notes", "kind"].some(k => k in f)) f.edited = true;
   res.json(await update("tasks", req.params.id, f));
 }));
-app.delete("/api/tasks/:id", wrap(async (req, res) => {
-  // Las de ILIAS se ocultan (para que no vuelvan en la próxima sincronización)
-  await q("UPDATE tasks SET hidden=true WHERE id=$1 AND ext_uid IS NOT NULL", [req.params.id]);
-  await q("DELETE FROM tasks WHERE id=$1 AND ext_uid IS NULL", [req.params.id]);
+// Borrar = ocultar (así se puede deshacer, y las de ILIAS no vuelven en la próxima sincronización)
+app.delete("/api/tasks/:id", wrap(async (req, res) => { await q("UPDATE tasks SET hidden=true WHERE id=$1", [req.params.id]); res.json({ ok: true }); }));
+app.post("/api/tasks/:id/restore", wrap(async (req, res) => res.json((await q("UPDATE tasks SET hidden=false WHERE id=$1 RETURNING *", [req.params.id])).rows[0])));
+app.post("/api/tasks/clear-done", wrap(async (req, res) => {
+  const { rows } = await q("UPDATE tasks SET hidden=true WHERE done=true AND hidden=false RETURNING id"); res.json({ ids: rows.map(r => r.id) });
+}));
+app.post("/api/tasks/restore-many", wrap(async (req, res) => { await q("UPDATE tasks SET hidden=false WHERE id = ANY($1::int[])", [req.body.ids || []]); res.json({ ok: true }); }));
+// Renombrar / quitar asignaturas también en tareas y sesiones
+app.post("/api/subjects/rename", wrap(async (req, res) => {
+  const { from, to } = req.body; if (!from) return res.status(400).json({ error: "Falta el nombre" });
+  await q("UPDATE tasks SET subject=$2 WHERE subject=$1", [from, to || null]);
+  if (to) await q("UPDATE sessions SET subject=$2 WHERE subject=$1", [from, to]);
   res.json({ ok: true });
 }));
 
@@ -384,7 +393,7 @@ app.post("/api/ilias/sync", wrap(async (req, res) => res.json(await syncIlias())
 // ---------- Ajustes ----------
 app.get("/api/settings", wrap(async (req, res) => res.json(await getSettings())));
 app.put("/api/settings", wrap(async (req, res) => {
-  for (const k of ["targets", "subjects", "focus", "pomodoro", "ilias_url", "exams"]) if (req.body[k] !== undefined) await setSetting(k, req.body[k]);
+  for (const k of ["targets", "subjects", "subject_colors", "focus", "pomodoro", "ilias_url", "exams"]) if (req.body[k] !== undefined) await setSetting(k, req.body[k]);
   res.json(await getSettings());
 }));
 app.get("/api/export", wrap(async (req, res) => {

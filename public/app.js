@@ -3,8 +3,8 @@
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const COLORS = { SuS: "var(--SuS)", EEN: "var(--EEN)", HEF: "var(--HEF)", MSUP: "var(--MSUP)", Otro: "var(--Otro)" };
-const col = s => COLORS[s] || "var(--Otro)";
+const PALETTE = ["#3b5bdb", "#1c7ed6", "#0c8599", "#2b8a3e", "#5c940d", "#f08c00", "#d9480f", "#e03131", "#c2255c", "#7048e8", "#862e9c", "#868e96"];
+const col = s => (settings?.subject_colors || {})[s] || "var(--Otro)";
 const LABELS = ["#e03131", "#f08c00", "#f2c94c", "#2f9e44", "#1c7ed6", "#7048e8", "#868e96"];
 const pad = n => String(n).padStart(2, "0");
 const fmtHM = min => { min = Math.round(min); const h = Math.floor(min / 60), m = min % 60; return h ? `${h} h ${pad(m)}` : `${m} min`; };
@@ -25,7 +25,14 @@ async function api(path, opts = {}) {
   if (!r.ok) throw new Error(data.error || "Error " + r.status);
   return data;
 }
-function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 2600); }
+// toast con acción opcional (p. ej. «Deshacer»)
+function toast(msg, actLabel, actFn) {
+  const t = $("#toast"), b = $("#toastAct");
+  $("#toastMsg").textContent = msg;
+  b.classList.toggle("hidden", !actLabel); b.textContent = actLabel || "";
+  b.onclick = () => { t.classList.remove("show"); actFn && actFn(); };
+  t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), actLabel ? 5000 : 2600);
+}
 
 // modal genérico: devuelve {action, data} o null
 function modal(title, inner, actions = [["cancel", "Cancelar"], ["save", "Guardar", "primary"]], left = null) {
@@ -361,42 +368,116 @@ document.addEventListener("click", e => {
 });
 
 // ---------- TAREAS ----------
-let tasks = [];
+let tasks = [], taskFilter = "", qaSubject = null, showDone = false;
 async function loadTasks() {
   tasks = await api("/tasks");
-  const f = $("#taskFilter"), cur = f.value;
-  f.innerHTML = `<option value="">Todas</option>` + settings.subjects.map(s => `<option ${s === cur ? "selected" : ""}>${esc(s)}</option>`).join("");
   try { $("#showCitas").checked = localStorage.getItem("uni:citas") === "1"; } catch { }
-  renderTasks();
+  renderQaSub(); renderTasks();
   const s = settings;
   $("#iliasInfo").textContent = !s.ilias_url ? "ILIAS sin conectar: pega tu enlace iCal en Ajustes." :
     s.ilias_last_error ? "⚠️ Última sincronización falló: " + s.ilias_last_error :
     s.ilias_last_sync ? "ILIAS sincronizado " + new Date(s.ilias_last_sync).toLocaleString("es-ES", { weekday: "short", hour: "2-digit", minute: "2-digit" }) : "";
 }
 $("#showCitas").onchange = () => { try { localStorage.setItem("uni:citas", $("#showCitas").checked ? "1" : "0"); } catch { } renderTasks(); };
-$("#taskFilter").onchange = renderTasks;
+
+function pillHTML(sub, extra = "") {
+  return sub ? `<button type="button" class="sub-pill" ${extra} style="background:${col(sub)}">${esc(sub)}</button>`
+             : `<button type="button" class="sub-pill none" ${extra}>+ asignatura</button>`;
+}
+function renderQaSub() { const b = $("#qaSub"); b.textContent = qaSubject || "Asignatura"; b.className = "sub-pill" + (qaSubject ? "" : " none"); b.style.background = qaSubject ? col(qaSubject) : ""; }
+$("#qaSub").onclick = e => subPicker(e.currentTarget, qaSubject, v => { qaSubject = v; renderQaSub(); $("#qaTitle").focus(); });
+$("#quickAdd").onsubmit = async e => {
+  e.preventDefault();
+  const title = $("#qaTitle").value.trim(); if (!title) return;
+  const d = $("#qaDue").value;
+  try {
+    const t = await api("/tasks", { method: "POST", body: { title, subject: qaSubject || (taskFilter || null), due: d ? new Date(d + "T23:59").toISOString() : null, kind: "tarea" } });
+    tasks.push(t); $("#qaTitle").value = ""; $("#qaDue").value = ""; renderTasks();
+  } catch (err) { toast(err.message); }
+};
+
+// Popover para elegir asignatura (como las etiquetas de Trello)
+function subPicker(anchor, current, onPick) {
+  const pop = $("#subPop");
+  if (pop._close) document.removeEventListener("click", pop._close);
+  pop.innerHTML = settings.subjects.map(s => `<button data-v="${esc(s)}"><span class="sw" style="background:${col(s)}"></span>${esc(s)}${s === current ? " ✓" : ""}</button>`).join("")
+    + `<button data-v=""><span class="sw" style="background:var(--soft)"></span>Sin asignatura${!current ? " ✓" : ""}</button><hr><button data-manage="1">🎨 Editar asignaturas…</button>`;
+  const r = anchor.getBoundingClientRect();
+  pop.classList.remove("hidden");
+  const w = pop.offsetWidth, h = pop.offsetHeight;
+  pop.style.left = Math.max(8, Math.min(r.left, innerWidth - w - 8)) + "px";
+  pop.style.top = (r.bottom + h + 8 > innerHeight ? Math.max(8, r.top - h - 6) : r.bottom + 6) + "px";
+  pop.querySelectorAll("button").forEach(b => b.onclick = ev => {
+    ev.stopPropagation(); pop.classList.add("hidden"); document.removeEventListener("click", pop._close);
+    if (b.dataset.manage) manageSubjects(); else onPick(b.dataset.v || null);
+  });
+  pop._close = ev => { if (!pop.contains(ev.target)) { pop.classList.add("hidden"); document.removeEventListener("click", pop._close); } };
+  setTimeout(() => document.addEventListener("click", pop._close), 0);
+}
+
+function renderFilter(list) {
+  const counts = {}; list.filter(t => !t.done).forEach(t => counts[t.subject || ""] = (counts[t.subject || ""] || 0) + 1);
+  const total = list.filter(t => !t.done).length;
+  const chip = (v, label, color) => `<button class="fchip ${taskFilter === v ? "on" : ""}" data-f="${esc(v)}" style="${taskFilter === v ? `background:${color}` : ""}">${color && v ? `<span class="dot" style="background:${color}"></span>` : ""}${esc(label)} <span class="n">${v ? (counts[v] || 0) : total}</span></button>`;
+  $("#subFilter").innerHTML = chip("", "Todas", "var(--ink)") + settings.subjects.map(s => chip(s, s, col(s))).join("");
+  $$("#subFilter .fchip").forEach(b => b.onclick = () => { taskFilter = b.dataset.f; renderTasks(); });
+}
 function renderTasks() {
-  const showCitas = $("#showCitas").checked, sub = $("#taskFilter").value;
-  const now = new Date(), t0 = startOfDay(), wEnd = new Date(t0.getTime() + 7 * 864e5);
-  const list = tasks.filter(t => (showCitas || t.kind !== "cita") && (!sub || t.subject === sub));
-  const groups = [["Vencidas", t => !t.done && t.due && new Date(t.due) < t0], ["Hoy", t => !t.done && t.due && new Date(t.due) >= t0 && new Date(t.due) < new Date(t0.getTime() + 864e5)],
-    ["Próximos 7 días", t => !t.done && t.due && new Date(t.due) >= new Date(t0.getTime() + 864e5) && new Date(t.due) < wEnd], ["Más adelante", t => !t.done && t.due && new Date(t.due) >= wEnd],
-    ["Sin fecha", t => !t.done && !t.due], ["Hechas", t => t.done]];
-  const html = groups.map(([name, fn]) => { const items = list.filter(fn); if (!items.length) return ""; if (name === "Hechas") items.splice(15); return `<div class="tgroup"><h3>${name} · ${items.length}</h3>${items.map(taskHTML).join("")}</div>`; }).join("");
-  $("#tasks").innerHTML = html || `<p class="muted">No hay tareas. Añade una o conecta ILIAS en Ajustes.</p>`;
-  $$("#tasks .task input").forEach(i => i.onchange = async () => { await api(`/tasks/${i.dataset.id}`, { method: "PATCH", body: { done: i.checked } }); const t = tasks.find(x => x.id == i.dataset.id); t.done = i.checked; renderTasks(); });
-  $$("#tasks .task .body").forEach(b => b.onclick = () => editTask(tasks.find(x => x.id == b.dataset.id)));
+  const showCitas = $("#showCitas").checked;
+  const base = tasks.filter(t => showCitas || t.kind !== "cita");
+  renderFilter(base);
+  const list = base.filter(t => !taskFilter || t.subject === taskFilter);
+  const t0 = startOfDay(), d1 = new Date(t0.getTime() + 864e5), wEnd = new Date(t0.getTime() + 7 * 864e5);
+  const due = t => t.due ? new Date(t.due) : null;
+  const groups = [["Vencidas", t => due(t) && due(t) < t0], ["Hoy", t => due(t) && due(t) >= t0 && due(t) < d1],
+    ["Próximos 7 días", t => due(t) && due(t) >= d1 && due(t) < wEnd], ["Más adelante", t => due(t) && due(t) >= wEnd], ["Sin fecha", t => !due(t)]];
+  const open = list.filter(t => !t.done), done = list.filter(t => t.done);
+  let html = groups.map(([name, fn]) => { const items = open.filter(fn); return items.length ? `<div class="tgroup"><h3>${name} · ${items.length}</h3>${items.map(taskHTML).join("")}</div>` : ""; }).join("");
+  if (!open.length) html = `<p class="muted" style="text-align:center;padding:24px 0">${done.length ? "🎉 Todo hecho" : "No hay tareas. Escribe una arriba."}</p>`;
+  if (done.length) html += `<div class="tgroup"><h3><button class="done-toggle" id="doneToggle">${showDone ? "▾" : "▸"} Hechas · ${done.length}</button><button class="btn sm" id="clearDone">Borrar hechas</button></h3>${showDone ? done.slice(0, 30).map(taskHTML).join("") : ""}</div>`;
+  $("#tasks").innerHTML = html;
+
+  $$("#tasks .task").forEach(el => {
+    const t = tasks.find(x => x.id == el.dataset.id);
+    el.querySelector(".chk").onclick = () => toggleDone(t, el);
+    el.querySelector(".del").onclick = () => deleteTask(t, el);
+    el.querySelector(".body").onclick = e => { if (!e.target.closest(".sub-pill")) editTask(t); };
+    el.querySelector(".sub-pill").onclick = e => { e.stopPropagation(); subPicker(e.currentTarget, t.subject, async v => { t.subject = v; renderTasks(); await api(`/tasks/${t.id}`, { method: "PATCH", body: { subject: v } }); }); };
+  });
+  const dt = $("#doneToggle"); if (dt) dt.onclick = () => { showDone = !showDone; renderTasks(); };
+  const cd = $("#clearDone"); if (cd) cd.onclick = clearDone;
 }
 function taskHTML(t) {
   const late = !t.done && t.due && new Date(t.due) < new Date();
   const due = t.due ? new Date(t.due) : null;
-  const dueTxt = due ? fmtDate(due) + (due.getHours() || due.getMinutes() ? " " + fmtTime(due) : "") : "";
-  return `<div class="task ${t.done ? "done" : ""}"><input type="checkbox" data-id="${t.id}" ${t.done ? "checked" : ""}>
-    <div class="body" data-id="${t.id}"><div class="tt">${esc(t.title)}</div><div class="tm">
-    ${t.subject ? `<span class="badge" style="background:${col(t.subject)}">${esc(t.subject)}</span>` : ""}
-    ${dueTxt ? `<span class="${late ? "late" : ""}">${dueTxt}</span>` : ""}
-    ${t.source === "ilias" ? `<span class="badge src">ILIAS${t.kind === "cita" ? " · cita" : ""}</span>` : ""}
-    ${t.notes ? "<span>☰</span>" : ""}</div></div></div>`;
+  const dueTxt = due ? fmtDate(due) + (due.getHours() || due.getMinutes() ? (due.getHours() === 23 && due.getMinutes() === 59 ? "" : " " + fmtTime(due)) : "") : "";
+  return `<div class="task ${t.done ? "done" : ""}" data-id="${t.id}" style="border-left-color:${t.subject ? col(t.subject) : "var(--line)"}">
+    <button class="chk" title="${t.done ? "Marcar como pendiente" : "Marcar como hecha"}">✓</button>
+    <div class="body"><div class="tt">${esc(t.title)}</div><div class="tm">
+      ${pillHTML(t.subject)}
+      ${dueTxt ? `<span class="${late ? "late" : ""}">📅 ${dueTxt}</span>` : ""}
+      ${t.source === "ilias" ? `<span class="badge src">ILIAS${t.kind === "cita" ? " · cita" : ""}</span>` : ""}
+      ${t.notes ? "<span>☰</span>" : ""}</div></div>
+    <button class="del" title="Eliminar">🗑</button></div>`;
+}
+function animateOut(el) { return new Promise(r => { el.classList.add("leaving"); setTimeout(r, 350); }); }
+async function toggleDone(t, el) {
+  const val = !t.done;
+  if (val) { el.classList.add("done"); await animateOut(el); }
+  t.done = val; renderTasks();
+  api(`/tasks/${t.id}`, { method: "PATCH", body: { done: val } }).catch(e => toast(e.message));
+  if (val) toast("Hecha ✓", "Deshacer", () => { t.done = false; renderTasks(); api(`/tasks/${t.id}`, { method: "PATCH", body: { done: false } }); });
+}
+async function deleteTask(t, el) {
+  await animateOut(el);
+  tasks = tasks.filter(x => x !== t); renderTasks();
+  await api(`/tasks/${t.id}`, { method: "DELETE" }).catch(e => toast(e.message));
+  toast("Tarea eliminada", "Deshacer", async () => { const r = await api(`/tasks/${t.id}/restore`, { method: "POST" }); tasks.push(r); renderTasks(); });
+}
+async function clearDone() {
+  const r = await api("/tasks/clear-done", { method: "POST" });
+  const removed = tasks.filter(t => t.done); tasks = tasks.filter(t => !t.done); renderTasks();
+  toast(`${r.ids.length} hechas borradas`, "Deshacer", async () => { await api("/tasks/restore-many", { method: "POST", body: { ids: r.ids } }); tasks.push(...removed); renderTasks(); });
 }
 async function editTask(t = {}) {
   const subOpts = `<option value="">—</option>` + settings.subjects.map(s => `<option ${s === t.subject ? "selected" : ""}>${esc(s)}</option>`).join("");
@@ -406,10 +487,10 @@ async function editTask(t = {}) {
     <label>Tipo<select name="kind"><option value="tarea" ${t.kind === "tarea" ? "selected" : ""}>Tarea</option><option value="entrega" ${t.kind === "entrega" ? "selected" : ""}>Entrega</option><option value="cita" ${t.kind === "cita" ? "selected" : ""}>Cita</option></select></label>
     <label>Notas<textarea name="notes" rows="4">${esc(t.notes || "")}</textarea></label>
     ${t.link ? `<a href="${esc(t.link)}" target="_blank" rel="noopener" class="small">Abrir en ILIAS ↗</a>` : ""}`,
-    undefined, t.id ? ["delete", t.source === "ilias" ? "Ocultar" : "Borrar"] : null);
+    undefined, t.id ? ["delete", "Eliminar"] : null);
   if (!r) return;
   try {
-    if (r.action === "delete") await api(`/tasks/${t.id}`, { method: "DELETE" });
+    if (r.action === "delete") { await api(`/tasks/${t.id}`, { method: "DELETE" }); toast("Tarea eliminada", "Deshacer", async () => { await api(`/tasks/${t.id}/restore`, { method: "POST" }); loadTasks(); }); }
     else {
       const body = { title: r.data.title, subject: r.data.subject || null, due: r.data.due ? new Date(r.data.due).toISOString() : null, notes: r.data.notes, kind: r.data.kind };
       await api(t.id ? `/tasks/${t.id}` : "/tasks", { method: t.id ? "PATCH" : "POST", body });
@@ -417,11 +498,42 @@ async function editTask(t = {}) {
     loadTasks();
   } catch (e) { toast(e.message); }
 }
-$("#newTask").onclick = () => editTask({ kind: "tarea" });
 $("#syncIlias").onclick = async () => {
   try { const r = await api("/ilias/sync", { method: "POST" }); settings = await api("/settings"); toast(r.skipped ? "Primero pega el enlace iCal en Ajustes" : `ILIAS: ${r.added} nuevas, ${r.updated} actualizadas`); loadTasks(); }
   catch (e) { settings = await api("/settings"); toast(e.message); loadTasks(); }
 };
+
+// Editor de asignaturas: nombre + color
+async function manageSubjects() {
+  let rows = settings.subjects.map(s => ({ orig: s, name: s, color: col(s).startsWith("#") ? col(s) : PALETTE[11] }));
+  const d = $("#modal"), f = $("#modalForm");
+  const draw = () => {
+    f.innerHTML = `<h2>Asignaturas</h2><div class="subs-edit">${rows.map((r, i) => `<div class="row"><span class="sub-pill" style="background:${r.color}">${esc(r.name || "…")}</span><input data-i="${i}" value="${esc(r.name)}" placeholder="Nombre"><button type="button" class="icon-btn" data-rm="${i}" title="Quitar">×</button><div class="pal">${PALETTE.map(c => `<button type="button" data-i="${i}" data-c="${c}" class="${c === r.color ? "on" : ""}" style="background:${c}"></button>`).join("")}</div></div>`).join("")}</div>
+      <button type="button" class="btn sm" id="addSub">+ Añadir asignatura</button>
+      <div class="m-actions"><div></div><div><button type="button" class="btn sm" id="subCancel">Cancelar</button><button type="button" class="btn sm primary" id="subSave">Guardar</button></div></div>`;
+    f.querySelectorAll("input[data-i]").forEach(inp => inp.oninput = () => { rows[inp.dataset.i].name = inp.value; inp.previousElementSibling.textContent = inp.value || "…"; });
+    f.querySelectorAll(".pal button").forEach(b => b.onclick = () => { rows[b.dataset.i].color = b.dataset.c; draw(); });
+    f.querySelectorAll("[data-rm]").forEach(b => b.onclick = () => { rows.splice(+b.dataset.rm, 1); draw(); });
+    $("#addSub").onclick = () => { rows.push({ orig: null, name: "", color: PALETTE[rows.length % PALETTE.length] }); draw(); f.querySelector(`input[data-i="${rows.length - 1}"]`).focus(); };
+    $("#subCancel").onclick = () => d.close();
+    $("#subSave").onclick = async () => {
+      const clean = rows.map(r => ({ ...r, name: r.name.trim() })).filter(r => r.name);
+      const names = clean.map(r => r.name);
+      if (new Set(names).size !== names.length) return toast("Hay dos asignaturas con el mismo nombre");
+      for (const r of clean) if (r.orig && r.orig !== r.name) await api("/subjects/rename", { method: "POST", body: { from: r.orig, to: r.name } });
+      for (const s of settings.subjects) if (!clean.find(r => r.orig === s)) await api("/subjects/rename", { method: "POST", body: { from: s, to: null } });
+      const colors = Object.fromEntries(clean.map(r => [r.name, r.color]));
+      const targets = {}; for (const r of clean) { const old = settings.targets[r.orig ?? r.name]; if (old !== undefined) targets[r.name] = old; }
+      settings = await api("/settings", { method: "PUT", body: { subjects: names, subject_colors: colors, targets } });
+      d.close(); toast("Asignaturas guardadas");
+      if (view === "tareas") loadTasks(); if (view === "estudio") loadStats(); if (view === "ajustes") fillSettings();
+    };
+  };
+  f.onsubmit = e => e.preventDefault();
+  draw(); d.onclose = null; d.showModal();
+}
+$("#manageSubs").onclick = manageSubjects;
+$("#manageSubs2").onclick = manageSubjects;
 
 // ---------- AJUSTES ----------
 function fillSettings() {
