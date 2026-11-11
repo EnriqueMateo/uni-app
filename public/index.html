@@ -13,7 +13,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-<link rel="stylesheet" href="/styles.css?v=7">
+<link rel="stylesheet" href="/styles.css?v=8">
 </head>
 <body>
 <div id="login" class="login hidden">
@@ -78,7 +78,12 @@
         <button class="btn sm" id="newBoard">+ Tablero</button>
         <button class="icon-btn" id="boardMenu" title="Opciones del tablero">⋯</button>
       </div>
+      <div class="filter-row" style="margin-bottom:10px">
+        <div class="chips-scroll" id="boardFilter"></div>
+        <button class="icon-btn" id="manageSubs3" title="Asignaturas y colores">🎨</button>
+      </div>
       <div class="board" id="board"></div>
+      <div class="done-bar" id="doneBar"></div>
     </section>
 
     <!-- TAREAS -->
@@ -152,6 +157,6 @@
 
 <script src="/vendor/sortable.min.js"></script>
 <script src="/vendor/webauthn.min.js"></script>
-<script src="/app.js?v=7"></script>
+<script src="/app.js?v=8"></script>
 </body>
 </html>

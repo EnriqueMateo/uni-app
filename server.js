@@ -47,6 +47,9 @@ async function migrate() {
     id TEXT PRIMARY KEY, public_key BYTEA NOT NULL, counter BIGINT NOT NULL DEFAULT 0, transports JSONB,
     name TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), last_used TIMESTAMPTZ);
   CREATE INDEX IF NOT EXISTS sessions_started ON sessions(started_at);
+  ALTER TABLE cards ADD COLUMN IF NOT EXISTS subject TEXT;
+  ALTER TABLE cards ADD COLUMN IF NOT EXISTS done BOOLEAN NOT NULL DEFAULT false;
+  ALTER TABLE cards ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT false;
   `);
   if (!SECRET) {
     const r = await q("SELECT value FROM settings WHERE key='_secret'");
@@ -305,7 +308,7 @@ app.get("/api/boards/:id", wrap(async (req, res) => {
   const board = (await q("SELECT * FROM boards WHERE id=$1", [req.params.id])).rows[0];
   if (!board) return res.status(404).json({ error: "No existe" });
   const lists = (await q("SELECT * FROM lists WHERE board_id=$1 ORDER BY position, id", [board.id])).rows;
-  const cards = (await q("SELECT c.* FROM cards c JOIN lists l ON l.id=c.list_id WHERE l.board_id=$1 ORDER BY c.position, c.id", [board.id])).rows;
+  const cards = (await q("SELECT c.* FROM cards c JOIN lists l ON l.id=c.list_id WHERE l.board_id=$1 AND c.archived=false ORDER BY c.position, c.id", [board.id])).rows;
   for (const l of lists) l.cards = cards.filter(c => c.list_id === l.id);
   res.json({ ...board, lists });
 }));
@@ -323,8 +326,15 @@ app.post("/api/lists/:id/order", wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 app.post("/api/cards", wrap(async (req, res) => res.json((await q("INSERT INTO cards(list_id,title,position) VALUES ($1,$2,(SELECT COALESCE(max(position),0)+1 FROM cards WHERE list_id=$1)) RETURNING *", [req.body.list_id, req.body.title || "Tarjeta"])).rows[0])));
-app.patch("/api/cards/:id", wrap(async (req, res) => res.json(await update("cards", req.params.id, pick(req.body, ["title", "description", "label", "due", "list_id", "position"])))));
-app.delete("/api/cards/:id", wrap(async (req, res) => { await q("DELETE FROM cards WHERE id=$1", [req.params.id]); res.json({ ok: true }); }));
+app.patch("/api/cards/:id", wrap(async (req, res) => res.json(await update("cards", req.params.id, pick(req.body, ["title", "description", "label", "due", "list_id", "position", "subject", "done"])))));
+// Eliminar tarjeta = archivar (para poder deshacer)
+app.delete("/api/cards/:id", wrap(async (req, res) => { await q("UPDATE cards SET archived=true WHERE id=$1", [req.params.id]); res.json({ ok: true }); }));
+app.post("/api/cards/:id/restore", wrap(async (req, res) => res.json((await q("UPDATE cards SET archived=false WHERE id=$1 RETURNING *", [req.params.id])).rows[0])));
+app.post("/api/boards/:id/clear-done", wrap(async (req, res) => {
+  const { rows } = await q("UPDATE cards c SET archived=true FROM lists l WHERE l.id=c.list_id AND l.board_id=$1 AND c.done=true AND c.archived=false RETURNING c.id", [req.params.id]);
+  res.json({ ids: rows.map(r => r.id) });
+}));
+app.post("/api/cards/restore-many", wrap(async (req, res) => { await q("UPDATE cards SET archived=false WHERE id = ANY($1::int[])", [req.body.ids || []]); res.json({ ok: true }); }));
 
 // ---------- Tareas ----------
 app.get("/api/tasks", wrap(async (req, res) => res.json((await q("SELECT * FROM tasks WHERE hidden=false ORDER BY done, due NULLS LAST, id")).rows)));
@@ -352,6 +362,7 @@ app.post("/api/tasks/restore-many", wrap(async (req, res) => { await q("UPDATE t
 app.post("/api/subjects/rename", wrap(async (req, res) => {
   const { from, to } = req.body; if (!from) return res.status(400).json({ error: "Falta el nombre" });
   await q("UPDATE tasks SET subject=$2 WHERE subject=$1", [from, to || null]);
+  await q("UPDATE cards SET subject=$2 WHERE subject=$1", [from, to || null]);
   if (to) await q("UPDATE sessions SET subject=$2 WHERE subject=$1", [from, to]);
   res.json({ ok: true });
 }));

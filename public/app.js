@@ -285,13 +285,32 @@ $("#boardMenu").onclick = async () => {
   loadBoards();
 };
 
+let boardSubFilter = "", showDoneCards = false;
 async function loadBoard() { board = await api(`/boards/${boardId}`); renderBoard(); }
+const visibleCard = c => (showDoneCards || !c.done) && (!boardSubFilter || c.subject === boardSubFilter);
+function renderBoardFilter() {
+  const all = board.lists.flatMap(l => l.cards).filter(c => !c.done);
+  const n = v => all.filter(c => c.subject === v).length;
+  const chip = (v, label, color) => `<button class="fchip ${boardSubFilter === v ? "on" : ""}" data-f="${esc(v)}" style="${boardSubFilter === v ? `background:${color}` : ""}">${v ? `<span class="dot" style="background:${color}"></span>` : ""}${esc(label)} <span class="n">${v ? n(v) : all.length}</span></button>`;
+  $("#boardFilter").innerHTML = chip("", "Todas", "var(--ink)") + settings.subjects.map(s => chip(s, s, col(s))).join("");
+  $$("#boardFilter .fchip").forEach(b => b.onclick = () => { boardSubFilter = b.dataset.f; renderBoard(); });
+  const doneN = board.lists.flatMap(l => l.cards).filter(c => c.done).length;
+  $("#doneBar").innerHTML = doneN ? `<span>${doneN} hecha${doneN > 1 ? "s" : ""}</span><button class="btn sm" id="toggleDoneCards">${showDoneCards ? "Ocultar" : "Mostrar"}</button><button class="btn sm" id="clearDoneCards">Borrar hechas</button>` : "";
+  if (doneN) {
+    $("#toggleDoneCards").onclick = () => { showDoneCards = !showDoneCards; renderBoard(); };
+    $("#clearDoneCards").onclick = async () => {
+      const r = await api(`/boards/${board.id}/clear-done`, { method: "POST" }); await loadBoard();
+      toast(`${r.ids.length} tarjetas hechas borradas`, "Deshacer", async () => { await api("/cards/restore-many", { method: "POST", body: { ids: r.ids } }); loadBoard(); });
+    };
+  }
+}
 function renderBoard() {
   const el = $("#board"); const today = startOfDay();
+  renderBoardFilter();
   el.innerHTML = board.lists.map(l => `
     <div class="list" data-id="${l.id}">
       <div class="list-h"><input value="${esc(l.name)}" data-list="${l.id}"><button class="icon-btn" data-del-list="${l.id}" title="Borrar lista">×</button></div>
-      <div class="cards" data-list="${l.id}">${l.cards.map(c => cardHTML(c, today)).join("")}</div>
+      <div class="cards" data-list="${l.id}">${l.cards.filter(visibleCard).map(c => cardHTML(c, today)).join("")}</div>
       <button class="add-card" data-add="${l.id}">+ Añadir tarjeta</button>
     </div>`).join("") + `<button class="add-list" id="addList">+ Añadir lista</button>`;
 
@@ -306,7 +325,24 @@ function renderBoard() {
     const r = await modal("Nueva lista", `<label>Nombre<input name="name" required></label>`, [["cancel", "Cancelar"], ["save", "Crear", "primary"]]);
     if (r) { await api("/lists", { method: "POST", body: { board_id: board.id, name: r.data.name } }); loadBoard(); }
   };
-  $$(".kcard").forEach(c => c.onclick = () => editCard(+c.dataset.id));
+  $$(".kcard").forEach(el => {
+    const c = board.lists.flatMap(l => l.cards).find(x => x.id === +el.dataset.id);
+    el.onclick = e => { if (!e.target.closest("button")) editCard(c.id); };
+    el.querySelector(".k-done").onclick = async e => {
+      e.stopPropagation(); const val = !c.done;
+      if (val && !showDoneCards) { el.classList.add("leaving"); await new Promise(r => setTimeout(r, 300)); }
+      c.done = val; renderBoard();
+      api(`/cards/${c.id}`, { method: "PATCH", body: { done: val } });
+      if (val) toast("Tarjeta hecha ✓", "Deshacer", () => { c.done = false; renderBoard(); api(`/cards/${c.id}`, { method: "PATCH", body: { done: false } }); });
+    };
+    el.querySelector(".k-del").onclick = async e => {
+      e.stopPropagation(); el.classList.add("leaving"); await new Promise(r => setTimeout(r, 300));
+      board.lists.forEach(l => l.cards = l.cards.filter(x => x !== c)); renderBoard();
+      await api(`/cards/${c.id}`, { method: "DELETE" });
+      toast("Tarjeta eliminada", "Deshacer", async () => { await api(`/cards/${c.id}/restore`, { method: "POST" }); loadBoard(); });
+    };
+    el.querySelector(".sub-pill").onclick = e => { e.stopPropagation(); subPicker(e.currentTarget, c.subject, async v => { c.subject = v; renderBoard(); await api(`/cards/${c.id}`, { method: "PATCH", body: { subject: v } }); }); };
+  });
 
   if (window.Sortable) {
     $$(".cards").forEach(c => Sortable.create(c, {
@@ -326,8 +362,11 @@ function renderBoard() {
 function cardHTML(c, today) {
   const due = c.due ? new Date(c.due.slice(0, 10) + "T00:00") : null;
   const late = due && due < today;
-  return `<div class="kcard" data-id="${c.id}">${c.label ? `<div class="lbl" style="background:${esc(c.label)}"></div>` : ""}${esc(c.title)}
-    ${(due || c.description) ? `<div class="meta">${due ? `<span class="${late ? "late" : ""}">📅 ${fmtDate(due)}</span>` : ""}${c.description ? "<span>☰</span>" : ""}</div>` : ""}</div>`;
+  const border = c.subject ? col(c.subject) : (c.label || "var(--line)");
+  return `<div class="kcard ${c.done ? "done" : ""}" data-id="${c.id}" style="border-left-color:${esc(border)}">
+    <div class="acts"><button class="k-done" title="${c.done ? "Marcar como pendiente" : "Marcar como hecha"}">✓</button><button class="k-del" title="Eliminar">🗑</button></div>
+    ${pillHTML(c.subject)}<div class="ktitle">${esc(c.title)}</div>
+    ${(due || c.description) ? `<div class="meta">${due ? `<span class="${late && !c.done ? "late" : ""}">📅 ${fmtDate(due)}</span>` : ""}${c.description ? "<span>☰</span>" : ""}</div>` : ""}</div>`;
 }
 function addCardInline(btn) {
   const listId = btn.dataset.add, wrap = document.createElement("div");
@@ -337,7 +376,7 @@ function addCardInline(btn) {
   const done = async save => {
     if (finished) return; finished = true;
     const t = ta.value.trim();
-    if (save && t) { await api("/cards", { method: "POST", body: { list_id: listId, title: t } }); await loadBoard(); const nb = $(`[data-add="${listId}"]`); if (nb) addCardInline(nb); }
+    if (save && t) { const nc = await api("/cards", { method: "POST", body: { list_id: listId, title: t } }); if (boardSubFilter) await api(`/cards/${nc.id}`, { method: "PATCH", body: { subject: boardSubFilter } }); await loadBoard(); const nb = $(`[data-add="${listId}"]`); if (nb) addCardInline(nb); }
     else loadBoard();
   };
   ta.onkeydown = e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); done(true); } if (e.key === "Escape") done(false); };
@@ -350,12 +389,13 @@ async function editCard(id) {
     <label>Título<input name="title" value="${esc(c.title)}" required></label>
     <label>Descripción<textarea name="description" rows="4">${esc(c.description)}</textarea></label>
     <div class="row2"><label>Fecha<input type="date" name="due" value="${c.due ? c.due.slice(0, 10) : ""}"></label><label>Lista<select name="list_id">${listOpts}</select></label></div>
-    <label>Etiqueta<input type="hidden" name="label" value="${esc(c.label || "")}" id="lblIn"><div class="labels">${LABELS.map(x => `<button type="button" data-c="${x}" class="${x === c.label ? "on" : ""}" style="background:${x}"></button>`).join("")}<button type="button" data-c="" style="background:var(--soft)" class="${!c.label ? "on" : ""}" title="Sin etiqueta"></button></div></label>`,
-    undefined, ["delete", "Borrar"]);
+    <label>Asignatura<select name="subject"><option value="">—</option>${settings.subjects.map(s => `<option ${s === c.subject ? "selected" : ""}>${esc(s)}</option>`).join("")}</select></label>
+    <label class="toggle"><input type="checkbox" name="done" ${c.done ? "checked" : ""}> Hecha</label>`,
+    undefined, ["delete", "Eliminar"]);
   if (!r) return;
-  if (r.action === "delete") await api(`/cards/${id}`, { method: "DELETE" });
+  if (r.action === "delete") { await api(`/cards/${id}`, { method: "DELETE" }); toast("Tarjeta eliminada", "Deshacer", async () => { await api(`/cards/${id}/restore`, { method: "POST" }); loadBoard(); }); }
   else {
-    const body = { title: r.data.title, description: r.data.description, due: r.data.due || null, label: r.data.label || null };
+    const body = { title: r.data.title, description: r.data.description, due: r.data.due || null, subject: r.data.subject || null, done: !!r.data.done };
     if (+r.data.list_id !== c.list_id) { body.list_id = +r.data.list_id; body.position = 9999; }
     await api(`/cards/${id}`, { method: "PATCH", body });
   }
@@ -526,7 +566,7 @@ async function manageSubjects() {
       const targets = {}; for (const r of clean) { const old = settings.targets[r.orig ?? r.name]; if (old !== undefined) targets[r.name] = old; }
       settings = await api("/settings", { method: "PUT", body: { subjects: names, subject_colors: colors, targets } });
       d.close(); toast("Asignaturas guardadas");
-      if (view === "tareas") loadTasks(); if (view === "estudio") loadStats(); if (view === "ajustes") fillSettings();
+      if (view === "tareas") loadTasks(); if (view === "tablero") loadBoard(); if (view === "estudio") loadStats(); if (view === "ajustes") fillSettings();
     };
   };
   f.onsubmit = e => e.preventDefault();
@@ -534,6 +574,7 @@ async function manageSubjects() {
 }
 $("#manageSubs").onclick = manageSubjects;
 $("#manageSubs2").onclick = manageSubjects;
+$("#manageSubs3").onclick = manageSubjects;
 
 // ---------- AJUSTES ----------
 function fillSettings() {

@@ -197,3 +197,18 @@ dialog::backdrop{background:rgba(0,0,0,.35)}
 .subs-edit .pal button{width:24px;height:20px;border-radius:5px;border:2px solid transparent;cursor:pointer;padding:0}
 .subs-edit .pal button.on{border-color:var(--ink)}
 dialog{max-height:88vh;overflow:auto}
+
+/* tablero v2 */
+.kcard{position:relative;border-left:4px solid var(--line);padding-right:58px;transition:opacity .3s, transform .3s}
+.kcard.leaving{opacity:0;transform:scale(.92)}
+.kcard .sub-pill{font-size:11px;padding:1px 8px;margin-bottom:5px;display:inline-block}
+.kcard .acts{position:absolute;top:6px;right:6px;display:flex;gap:2px}
+.kcard .acts button{width:24px;height:24px;border-radius:6px;border:0;background:var(--soft);color:var(--mute);cursor:pointer;font-size:13px;padding:0;display:grid;place-items:center}
+.kcard .acts .k-done:hover{background:var(--accent);color:#fff}
+.kcard .acts .k-del:hover{background:var(--danger);color:#fff}
+.kcard.done{opacity:.55}
+.kcard.done .ktitle{text-decoration:line-through}
+.kcard.done .k-done{background:var(--accent);color:#fff}
+@media (hover:hover){.kcard .acts{opacity:0;transition:opacity .15s}.kcard:hover .acts{opacity:1}}
+.done-bar{display:flex;gap:8px;align-items:center;justify-content:center;margin-top:4px;font-size:13px;color:var(--mute)}
+.done-bar:empty{display:none}
